@@ -1,5 +1,4 @@
-#! /usr/bin/env nix
-#! nix shell installables --command kotlin
+#!/usr/bin/env kotlin
 
 import java.util.regex.Pattern
 
@@ -35,12 +34,12 @@ val MAORIHANGA_MAP = mapOf(
 
 fun translateToMaorihanga(inputText: String): String {
     // 1. Normalize and clean the text, convert to lowercase, and handle macrons.
-    var text = inputText.toLowerCase()
-        .replace('ā', 'a' + '·')
-        .replace('ē', 'e' + '·')
-        .replace('ī', 'i' + '·')
-        .replace('ō', 'o' + '·')
-        .replace('ū', 'u' + '·')
+    var text = inputText.lowercase()
+        .replace("ā", "a·")
+        .replace("ē", "e·")
+        .replace("ī", "i·")
+        .replace("ō", "o·")
+        .replace("ū", "u·")
 
     // Regex Update: Capture an optional second vowel/long mark (V2) to identify diphthongs.
     // Diphthongs are V1 followed by V2, both treated as part of the vowel component.
@@ -81,19 +80,30 @@ fun translateToMaorihanga(inputText: String): String {
         // --- 3. Apply Compaction/Stacking Logic ---
         // Compaction is based on the FIRST vowel (V1)
 
+		// ( ( (lead − 1) * 588 ) + ((vowel − 1) * 28) + tail) + 44032
         val firstBaseVowel = v1Base.first()
 
-        val block = when (firstBaseVowel) {
-            'o', 'u' -> {
-                // Horizontal Vowel (V1): Stack Consonant on Top
-                "(\n$initialC\n$finalVowel\n)"
-            }
-            'a', 'e', 'i' -> {
-                // Vertical Vowel (V1): Place Consonant and Vowel side-by-side.
-                "($initialC$finalVowel)"
-            }
-            else -> "($initialC$finalVowel)"
-        }
+		// https://brookjeynes.dev/posts/unicode-hangeul/
+		val block = (
+			44032 +
+			588 * (initialC[0].code - 11000) +
+			28 * (finalVowel[0].code - 1161) +
+			if (finalVowel.length == 1) { 0 } else { finalVowel[1].code - 0x11A7 }
+		).toChar()
+
+
+
+//        val block = when (firstBaseVowel) {
+//            'o', 'u' -> {
+//                // Horizontal Vowel (V1): Stack Consonant on Top
+//                "(\n$initialC\n$finalVowel\n)"
+//            }
+//            'a', 'e', 'i' -> {
+//                // Vertical Vowel (V1): Place Consonant and Vowel side-by-side.
+//                "($initialC$finalVowel)"
+//            }
+//            else -> "($initialC$finalVowel)"
+//        }
 
         output.append(block).append(" ")
     }
@@ -111,4 +121,7 @@ fun main() {
     println("---")
     println("Māorihanga Translation with Diphthongs (Simulated Compaction):")
     println(maorihangaResult)
+
 }
+
+main()
