@@ -1,3 +1,6 @@
+#! /usr/bin/env nix
+#! nix shell installables --command kotlin
+
 import java.util.regex.Pattern
 
 // --- 1. Māorihanga Character Map ---
@@ -23,7 +26,7 @@ val MAORIHANGA_MAP = mapOf(
     "i" to "ㅣ", "ī" to "ㅣ·",
     "o" to "ㅗ", "ō" to "ㅗ·",
     "u" to "ㅡ", "ū" to "ㅡ·",
-    
+
     // Vowel-Initial Syllable Placeholder (Silent 'ㅇ')
     "VOWEL_PL" to "ㅇ"
 )
@@ -31,8 +34,7 @@ val MAORIHANGA_MAP = mapOf(
 // --- 2. Syllabification and Translation Logic ---
 
 fun translateToMaorihanga(inputText: String): String {
-    // 1. Normalize and clean the text, convert to lowercase.
-    // Replace macrons (ā, ō etc.) with the standard letter plus the long vowel marker (ā -> a·)
+    // 1. Normalize and clean the text, convert to lowercase, and handle macrons.
     var text = inputText.toLowerCase()
         .replace('ā', 'a' + '·')
         .replace('ē', 'e' + '·')
@@ -40,84 +42,73 @@ fun translateToMaorihanga(inputText: String): String {
         .replace('ō', 'o' + '·')
         .replace('ū', 'u' + '·')
 
-    // 2. Tokenize the text into syllables/words using a simplified RegEx.
-    // This Regex attempts to capture Ng, Wh, C, V, and Vowel-Long markers (·)
-    // NOTE: True syllabification would require a more complex state machine.
-    val syllablePattern = Pattern.compile("(ng|wh|[mpntrkhw])?([aeiou])(·)?([aeiou])?(·)?")
+    // Regex Update: Capture an optional second vowel/long mark (V2) to identify diphthongs.
+    // Diphthongs are V1 followed by V2, both treated as part of the vowel component.
+    // The pattern tries to match: (C or V-PL) + V1 + (optional ·) + (optional V2 + optional ·)
+    val syllablePattern = Pattern.compile("((?:ng|wh|[mpntrkhw])?)((?:[aeiou])(·)?((?:[aeiou])(·)?)?)")
     val matcher = syllablePattern.matcher(text)
-    
+
     val output = StringBuilder()
 
     while (matcher.find()) {
-        val consonant = matcher.group(1) // C (e.g., 'k', 'ng')
-        val vowel1 = matcher.group(2)    // V1 (e.g., 'a')
-        val long1 = matcher.group(3)     // · (Long Vowel Marker)
-        val vowel2 = matcher.group(4)    // V2 (For diphthongs/double vowels, e.g., 'o' in 'ao')
-        val long2 = matcher.group(5)     // · (Long Vowel Marker for V2)
-        
-        // --- Assemble the Consonant Component ---
-        val initialC = if (consonant != null) {
-            MAORIHANGA_MAP[consonant]!! 
-        } else if (vowel1 != null) {
-            MAORIHANGA_MAP["VOWEL_PL"]!! // Use silent 'ㅇ' for vowel-initial syllables
+        val consonant = matcher.group(1).takeIf { it.isNotEmpty() } // C (e.g., 'k', 'ng') or null
+        val vowelComponent = matcher.group(2)!! // Full Vowel/Diphthong Component (e.g., 'ao', 'a·')
+
+        // Deconstruct Vowel Component for Compaction logic
+        val v1Base = vowelComponent.first().toString() // The base vowel (V1) determines compaction
+        val v1Char = MAORIHANGA_MAP[v1Base]!! + if (vowelComponent.contains('·')) "·" else "" // Simplified long mark logic
+
+        // Check for Diphthong (Vowel component is longer than 2 characters: V + V or V + · + V)
+        val isDiphthong = vowelComponent.length > 2 || (vowelComponent.length == 2 && vowelComponent.first() !in listOf('a','e','i','o','u'))
+
+        // Simplified Diphthong Mapping: Combine the Jamo characters
+        val finalVowel = if (vowelComponent.length > 1 && vowelComponent.substring(1).first() in listOf('a','e','i','o','u')) {
+             // Basic implementation for V1V2 (e.g., 'ao')
+             val v2Base = vowelComponent.substring(1).first().toString()
+             MAORIHANGA_MAP[v1Base]!! + MAORIHANGA_MAP[v2Base]!!
         } else {
-            "" // Should not happen in C-V structure
+            MAORIHANGA_MAP[v1Base]!! + if (vowelComponent.contains('·')) "·" else ""
         }
 
-        // --- Assemble the Vowel Component(s) ---
-        var finalVowel = ""
-        val v1Char = MAORIHANGA_MAP[vowel1]!! + (long1 ?: "")
-        
-        if (vowel2 != null) {
-            // This is a diphthong or a double vowel (e.g., 'ao', 'ia')
-            val v2Char = MAORIHANGA_MAP[vowel2]!! + (long2 ?: "")
-            finalVowel = "$v1Char$v2Char" // Concatenate V1 and V2
+
+        // --- Assemble the Consonant Component ---
+        val initialC = if (consonant != null) {
+            MAORIHANGA_MAP[consonant]!!
         } else {
-            finalVowel = v1Char
+            MAORIHANGA_MAP["VOWEL_PL"]!! // Use silent 'ㅇ' for vowel-initial syllables
         }
 
         // --- 3. Apply Compaction/Stacking Logic ---
-        // We use a simple vertical/horizontal Unicode line for visual stacking/compaction.
-        // Horizontal Vowels: O (ㅗ), U (ㅡ) -> Stack Consonant on Top
-        // Vertical Vowels: A (ㅏ), E (ㅓ), I (ㅣ) -> Place Consonant Left
-        
-        val firstBaseVowel = vowel1?.get(0)
-        
+        // Compaction is based on the FIRST vowel (V1)
+
+        val firstBaseVowel = v1Base.first()
+
         val block = when (firstBaseVowel) {
             'o', 'u' -> {
-                // Horizontal Vowel: Stack vertically.
-                "(\n$initialC\n$finalVowel\n)" 
+                // Horizontal Vowel (V1): Stack Consonant on Top
+                "(\n$initialC\n$finalVowel\n)"
             }
             'a', 'e', 'i' -> {
-                // Vertical Vowel: Place Consonant and Vowel side-by-side.
+                // Vertical Vowel (V1): Place Consonant and Vowel side-by-side.
                 "($initialC$finalVowel)"
             }
             else -> "($initialC$finalVowel)"
         }
-        
+
         output.append(block).append(" ")
     }
-    
+
     return output.toString().trim()
 }
 
-// --- 3. Example Execution ---
+// --- 3. Example Execution (Testing Diphthongs) ---
 
 fun main() {
-    val maoriProverb = "Mā te rā ka mōhio"
-    val maorihangaResult = translateToMaorihanga(maoriProverb)
+    val exampleDiphthongs = "Aotearoa, tau, wai, koe, rua"
+    val maorihangaResult = translateToMaorihanga(exampleDiphthongs)
 
-    println("Original Māori: $maoriProverb")
+    println("Original Māori: $exampleDiphthongs")
     println("---")
-    println("Māorihanga Translation (Simulated Compaction):")
+    println("Māorihanga Translation with Diphthongs (Simulated Compaction):")
     println(maorihangaResult)
-    println("\n-------------------------------------------------\n")
-
-    val anotherExample = "Aotearoa, Kia ora e hoa ma."
-    val aotearoaResult = translateToMaorihanga(anotherExample)
-    
-    println("Original Māori: $anotherExample")
-    println("---")
-    println("Māorihanga Translation (Simulated Compaction):")
-    println(aotearoaResult)
 }
